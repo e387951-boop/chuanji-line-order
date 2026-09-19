@@ -105,12 +105,12 @@ def pickup_check(text,config,now=None):
  return dt.strftime('%Y-%m-%d %H:%M')
 
 def order_text(o,config):
- parts=[config['name']+'｜下單完成', '訂單 '+o['id'], '取餐 '+o['pickup'], '姓名 '+o['name'], '電話 '+o['phone']]
+ parts=[config['name']+'｜下單完成', '━━━━━━━━━━━━', '訂單編號  '+o['id'], '取餐時間  '+o['pickup'], '取餐姓名  '+o['name'], '聯絡電話  '+o['phone'], '━━━━━━━━━━━━']
  for n,i in enumerate(o['items'],1):
   title=f"{n}. {i['name']}"+(' '+('大碗' if i['size']=='large' else '小碗') if i['size'] else '')+f" ×{i['qty']}  ${i['subtotal']}"
   if i['category']=='noodle': title+='\n'+i['spicy']+'；不加：'+('、'.join(i['omit']) or '無')+'；加料：'+('、'.join(x['name']+'×'+str(x['qty']) for x in i['extras']) or '無')+('；香菜換九層塔' if i['basil'] else '')
   parts.append(title)
- parts+=['總計 NT$ '+str(o['total']),'付款：現場付款・'+('已收款' if o['payment_status']=='paid' else '尚未付款')]
+ parts+=['━━━━━━━━━━━━','訂單總計  NT$ '+str(o['total']),'付款方式  現場付款・'+('已收款' if o['payment_status']=='paid' else '尚未付款')]
  if o['note']: parts.append('備註：'+o['note'])
  if config['address']: parts.append('取餐地址：'+config['address'])
  if config['phone']: parts.append('店家電話：'+config['phone'])

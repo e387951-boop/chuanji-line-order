@@ -128,6 +128,13 @@ class Handler(BaseHTTPRequestHandler):
      db.commit(); o['notifications']=self.notifications(o['id']); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
+     if path=='/api/admin/bind-notifications':
+      self.customer(s)
+      if self.server.demo: raise Problem('請在正式 LINE 點餐頁設定')
+      if not re.fullmatch(r'U[0-9a-f]{32}',s['user_id']): raise Problem('請重新從 LINE 登入',401)
+      db.execute('INSERT OR IGNORE INTO notification_owners VALUES (?,?)',(s['user_id'],nowstr()))
+      enqueue(db,'binding-'+secrets.token_hex(12),s['user_id'],'owner','川記麵線糊｜店家通知已綁定。之後有新訂單，官方帳號會傳訊息通知你。')
+      db.commit(); return self.respond(200,{'ok':True})
      if path=='/api/admin/logout': db.execute('UPDATE web_sessions SET admin=0 WHERE id=?',(s['id'],)); db.commit(); return self.respond(200,{'ok':True})
      if path=='/api/admin/product':
       pid=save_product(db,data); db.commit(); return self.respond(200,{'id':pid})

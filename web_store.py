@@ -24,6 +24,7 @@ def connect(path):
  CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS web_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, idem TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(user_id,idem));
  CREATE TABLE IF NOT EXISTS web_outbox (id TEXT PRIMARY KEY, order_id TEXT, recipient TEXT, payload TEXT, retry_key TEXT, attempts INTEGER DEFAULT 0, due REAL DEFAULT 0, state TEXT DEFAULT 'queued');
+ CREATE TABLE IF NOT EXISTS notification_owners (user_id TEXT PRIMARY KEY, created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS web_sessions (id TEXT PRIMARY KEY, csrf TEXT, user_id TEXT, admin INTEGER DEFAULT 0, expires REAL);
  ''')
  with db:
@@ -144,7 +145,9 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  db.execute('INSERT INTO web_orders VALUES (?,?,?,?,?)',(o['id'],user,idem,js(o),created))
  if not demo:
   enqueue(db,o['id'],user,'customer',order_text(o,config))
-  if owner: enqueue(db,o['id'],owner,'owner','【店家新訂單】\n'+order_text(o,config))
+  recipients={r[0] for r in db.execute('SELECT user_id FROM notification_owners')}
+  recipients.update(x.strip() for x in owner.split(',') if re.fullmatch(r'U[0-9a-f]{32}',x.strip()))
+  for recipient in sorted(recipients): enqueue(db,o['id'],recipient,'owner-'+recipient,'【店家新訂單】\n'+order_text(o,config))
  return o
 
 def get_orders(db,start='',end='',user=None):

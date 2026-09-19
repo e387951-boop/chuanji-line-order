@@ -118,10 +118,39 @@ def order_text(o,config):
  parts.append('訂單已登記，店家正在確認與安排製作。')
  return '\n'.join(parts)
 
+def order_cards(o,config,owner=False):
+ def text(value,size='sm',color='#263D35',weight='regular'):
+  return {'type':'text','text':str(value) or '—','size':size,'color':color,'weight':weight,'wrap':True}
+ def box(contents,**kwargs): return {'type':'box','layout':'vertical','contents':contents,**kwargs}
+ def rule(): return {'type':'separator','margin':'lg','color':'#E3E9E3'}
+ title='店家新訂單' if owner else '訂單已送出'
+ bubbles=[]
+ # Paginate rather than dropping bowls or customization on larger orders.
+ for start in range(0,len(o['items']),5):
+  body=[text('到店自取','sm','#687C71'),text(o['pickup'],'xl',weight='bold'),text('訂單編號 '+o['id'],'xs','#687C71'),rule(),text('取餐人  '+o['name']+' · '+o['phone']),rule()]
+  for n,i in enumerate(o['items'][start:start+5],start+1):
+   size=(' 大碗' if i['size']=='large' else ' 小碗') if i['size'] else ''
+   row=box([text(str(n)+'. '+i['name']+size,'md',weight='bold'),text('×'+str(i['qty'])+'　NT$ '+str(i['subtotal']),'sm','#24654F',weight='bold')],spacing='xs',margin='lg')
+   if i['category']=='noodle':
+    details=[i['spicy']]
+    if i['omit']: details.append('不加：'+'、'.join(i['omit']))
+    if i['extras']: details.append('加料：'+'、'.join(x['name']+' ×'+str(x['qty']) for x in i['extras']))
+    if i['basil']: details.append('香菜換九層塔')
+    row['contents'].append(text(' / '.join(details),'xs','#687C71'))
+   body.append(row)
+  body.extend([rule(),text('訂單總額','sm','#687C71'),text('NT$ '+str(o['total']),'xxl',weight='bold'),box([text('現場付款 · '+('已收款' if o['payment_status']=='paid' else '尚未付款'),'sm','#865D22')],backgroundColor='#FFF2DB',paddingAll='md',cornerRadius='md')])
+  if o['note']: body.extend([text('訂單備註','sm',weight='bold'),text(o['note'])])
+  if config['address']: body.extend([rule(),text('取餐地址','xs','#687C71'),text(config['address'])])
+  if config['phone']: body.append(text('店家電話 '+config['phone']))
+  body.append(text('請至後台確認訂單並安排製作。' if owner else '訂單已登記，店家正在確認與安排製作。','xs','#687C71'))
+  if len(o['items'])>5: body.append(text('餐點明細 '+str(start//5+1)+' / '+str((len(o['items'])+4)//5)+' · 總額為整筆訂單','xs','#687C71'))
+  bubbles.append({'type':'bubble','size':'mega','header':box([text(config['name'],'lg','#FFFFFF','bold'),text(title,'sm','#E4D9BE')],backgroundColor='#174B3B',paddingAll='xl',spacing='sm'),'body':box(body,paddingAll='xl',spacing='sm',backgroundColor='#FFFFFF')})
+ return [{'type':'flex','altText':(config['name']+'｜'+title+'｜'+o['id']+'｜NT$ '+str(o['total']))[:400],'contents':group[0] if len(group)==1 else {'type':'carousel','contents':group}} for group in [bubbles[k:k+4] for k in range(0,len(bubbles),4)]]
+
 def enqueue(db,order_id,recipient,kind,text):
  # Split long orders into LINE's allowed text message sizes, preserving all bowls.
- chunks=[text[i:i+4500] for i in range(0,len(text),4500)]
- payload={'to':recipient,'messages':[{'type':'text','text':c} for c in chunks[:5]]}
+ chunks=[text[i:i+4500] for i in range(0,len(text),4500)] if isinstance(text,str) else []
+ payload={'to':recipient,'messages':[{'type':'text','text':c} for c in chunks[:5]] if isinstance(text,str) else text}
  db.execute('INSERT INTO web_outbox(id,order_id,recipient,payload,retry_key) VALUES (?,?,?,?,?)',(order_id+':'+kind,order_id,recipient,js(payload),str(uuid.uuid4())))
 
 def place_order(db,user,data,demo=False,owner='',now=None):
@@ -144,10 +173,10 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  o={**priced,'id':'CJ'+(now or datetime.now(TZ)).strftime('%m%d')+'-'+secrets.token_hex(4).upper(),'name':name,'phone':phone,'pickup':pickup,'note':note,'status':'new','source':'line','external_order_id':None,'print_status':'not_connected','payment_method':'cash','payment_status':'unpaid','created_at':created,'demo':demo}
  db.execute('INSERT INTO web_orders VALUES (?,?,?,?,?)',(o['id'],user,idem,js(o),created))
  if not demo:
-  enqueue(db,o['id'],user,'customer',order_text(o,config))
+  enqueue(db,o['id'],user,'customer',order_cards(o,config))
   recipients={r[0] for r in db.execute('SELECT user_id FROM notification_owners')}
   recipients.update(x.strip() for x in owner.split(',') if re.fullmatch(r'U[0-9a-f]{32}',x.strip()))
-  for recipient in sorted(recipients): enqueue(db,o['id'],recipient,'owner-'+recipient,'【店家新訂單】\n'+order_text(o,config))
+  for recipient in sorted(recipients): enqueue(db,o['id'],recipient,'owner-'+recipient,order_cards(o,config,owner=True))
  return o
 
 def get_orders(db,start='',end='',user=None):

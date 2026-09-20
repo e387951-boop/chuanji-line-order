@@ -55,7 +55,14 @@ async function successPage(){
 async function ordersPage(){shell(header('我的訂單',true)+'<main class="shop-main"><div class="page-title"><h1>我的訂單</h1></div><div id="history" class="muted">載入中…</div></main>');try{const data=await api('/api/my-orders');if(!$('#history'))return;$('#history').innerHTML=data.orders.map(o=>`<button class="history-card" data-id="${esc(o.id)}"><span>${esc(o.id)}<b>${({new:'新訂單',preparing:'製作中',ready:'可取餐',completed:'已完成',cancelled:'已取消'})[o.status]}</b></span><strong>${esc(o.pickup)}</strong><span>${o.items.length} 項餐點 · ${money(o.total)}<small>查看明細 ›</small></span></button>`).join('')||'<div class="empty-state">還沒有訂單，從菜單挑選喜歡的餐點吧。</div>';document.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{receipt=await api('/api/order/'+b.dataset.id);nav('success')})}catch(e){if($('#history'))$('#history').textContent=e.message}}
 function route(){const page=location.hash.slice(1);if(page==='cart')cartPage();else if(page==='checkout')checkoutPage();else if(page==='success')successPage();else if(page==='orders')ordersPage();else menu();window.scrollTo(0,0)}
 async function init(){try{staticDemo=location.hostname.endsWith('.chatgpt.site');session=await api('/api/session');const data=await api('/api/catalog');products=data.products;settings=data.settings;if(!session.demo){await new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='https://static.line-scdn.net/liff/edge/2/sdk.js';s.onload=resolve;s.onerror=reject;document.head.append(s)});await liff.init({liffId:session.liff_id});if(!liff.isLoggedIn()){liff.login();return}await api('/api/auth/line',{id_token:liff.getIDToken()})}if(new URLSearchParams(location.search).get('owner')==='1'){ownerSetup();return}window.addEventListener('hashchange',route);route()}catch(e){$('#app').innerHTML='<div class="empty-state"><h1>暫時無法開啟點餐</h1><p>'+esc(e.message||'請稍後再試')+'</p><button class="primary" id="reload">重新載入</button></div>';$('#reload').onclick=()=>location.reload()}}
-init();
+function recoverLineLogin(){
+ const button=document.querySelector('#reload');
+ if(button&&document.querySelector('#app').textContent.includes('LINE 登入驗證失敗')&&window.liff){
+  button.textContent='重新登入 LINE';
+  button.onclick=()=>{liff.logout();liff.login({redirectUri:location.origin+location.pathname+(new URLSearchParams(location.search).get('owner')==='1'?'?owner=1':'')})};
+ }
+}
+init().then(recoverLineLogin);
 
 
 

@@ -189,7 +189,8 @@ def main():
  config={'liff_id':os.getenv('LIFF_ID',''),'channel_id':os.getenv('LINE_LOGIN_CHANNEL_ID',''),'token':os.getenv('LINE_CHANNEL_ACCESS_TOKEN',''),'owner':os.getenv('LINE_OWNER_USER_ID',''),'origin':os.getenv('PUBLIC_ORIGIN','').rstrip('/'),'admin_password':os.getenv('ADMIN_PASSWORD','')}
  if not args.demo and (not all(config[k] for k in ('liff_id','channel_id','token','origin','admin_password')) or not config['origin'].startswith('https://') or len(config['admin_password'])<12): p.error('Live mode requires LIFF_ID, LINE_LOGIN_CHANNEL_ID, LINE_CHANNEL_ACCESS_TOKEN, HTTPS PUBLIC_ORIGIN and ADMIN_PASSWORD (12+ characters).')
  path=Path(os.getenv('WEB_ORDER_DB',str(ROOT/('web-demo.sqlite3' if args.demo else 'web-orders.sqlite3'))));path.parent.mkdir(parents=True,exist_ok=True)
- use_postgres=not args.demo and bool(os.getenv('PGHOST'))
+ # Database migration is opt-in; staged credentials must not block storefront releases.
+ use_postgres=not args.demo and os.getenv('ORDER_STORAGE','sqlite').lower()=='postgres'
  if use_postgres and not all(os.getenv(k) for k in ('PGUSER','PGPASSWORD')): p.error('Postgres requires PGUSER and PGPASSWORD')
  db=connect(str(path),postgres=use_postgres);server=ThreadingHTTPServer(('127.0.0.1' if args.demo else '0.0.0.0',args.port),Handler); server.demo=args.demo;server.db=db
  for k,v in config.items():setattr(server,k,v)

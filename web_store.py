@@ -5,6 +5,7 @@ from core import TZ, MENU, SIDES, EXTRAS, SPICY
 
 DEFAULTS={'name':'川記麵線糊','address':'807高雄市三民區達德里熱河一街355號','phone':'','lead_minutes':15,'max_days':7,'accepting':True}
 SEASONS=['胡椒粉','烏醋','香油','蒜泥','香菜']
+ADDON_NAMES={'大腸','蚵仔','鮮蚵','蝦仁','發魷魚','魷魚','虱目魚漿','貢丸','油條'}
 STATUSES={'new':'新訂單','preparing':'製作中','ready':'可取餐','completed':'已完成','cancelled':'已取消'}
 TRANSITIONS={'new':['preparing','cancelled'],'preparing':['ready','cancelled'],'ready':['completed','cancelled'],'completed':[],'cancelled':[]}
 class Problem(Exception):
@@ -16,8 +17,12 @@ def integer(x,lo,hi,label):
  if isinstance(x,bool) or not isinstance(x,int) or not lo<=x<=hi: raise Problem(label+'超出可用範圍')
  return x
 
-def connect(path):
- db=sqlite3.connect(path,check_same_thread=False); db.row_factory=sqlite3.Row
+def connect(path,postgres=False):
+ if postgres:
+  from postgres_store import PostgresStore
+  db=PostgresStore()
+ else:
+  db=sqlite3.connect(path,check_same_thread=False); db.row_factory=sqlite3.Row
  db.executescript('''PRAGMA journal_mode=WAL;
  CREATE TABLE IF NOT EXISTS web_settings (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, data TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
@@ -44,6 +49,9 @@ def catalogue(db,all_items=False):
  items=[]
  for r in db.execute('SELECT * FROM products ORDER BY rowid'):
   p=json.loads(r['data']); p['version']=r['version']
+  if p['category']=='addon':
+   if p['name'] not in ADDON_NAMES and not all_items: continue
+   p['name']={'鮮蚵':'蚵仔','魷魚':'發魷魚'}.get(p['name'],p['name'])
   if all_items or p['active']: items.append(p)
  return items
 
@@ -70,6 +78,8 @@ def price_cart(db,items):
   p=products.get(item.get('product_id'))
   if not p or not p['active'] or p['category']=='addon': raise Problem('有餐點已下架，請回菜單重新選擇。',409)
   line={'product_id':p['id'],'name':p['name'],'category':p['category'],'photo':p['photo'],'qty':1,'size':'','extras':[],'omit':[],'spicy':'不辣','basil':False}
+  line['note']=str(item.get('note','')).strip()
+  if len(line['note'])>120: raise Problem('每份餐點備註最多120字')
   if p['category']=='noodle':
    size=item.get('size')
    if size not in ('small','large'): raise Problem('請選大小碗')
@@ -78,19 +88,23 @@ def price_cart(db,items):
    if spice not in SPICY: raise Problem('辣度選項錯誤')
    line['spicy']=spice; line['basil']=bool(item.get('basil',False))
    omitted=item.get('omit',[])
-   if not isinstance(omitted,list) or any(not isinstance(x,str) or x not in SEASONS+p['ingredients'] for x in omitted): raise Problem('不加項目已變更，請重新編輯這碗。',409)
+   if not isinstance(omitted,list) or any(not isinstance(x,str) or x not in SEASONS for x in omitted): raise Problem('固定配料不能取消，請在餐點備註填寫需求。',409)
    line['omit']=list(dict.fromkeys(omitted))
    if line['basil'] and '香菜' not in line['omit']: line['omit'].append('香菜')
    extras=item.get('extras',{})
    if not isinstance(extras,dict) or len(extras)>15: raise Problem('加料格式錯誤')
-   count=0
+   count=0; selected_names=set()
    for aid,q in extras.items():
-    q=integer(q,0,6,'加料份數')
-    if not q: continue
     a=products.get(aid)
-    if not a or a['category']!='addon' or not a['active']: raise Problem('有加料已下架，請重新編輯這碗。',409)
-    count+=q; unit+=a['price']*q; line['extras'].append({'id':aid,'name':a['name'],'qty':q,'price':a['price']})
-   if count>6: raise Problem('每碗加料最多6份')
+    if not a or a['category']!='addon' or not a['active'] or a['name'] not in ADDON_NAMES: raise Problem('加料選項已變更，請重新編輯這碗。',409)
+    separate=a['name']=='油條'
+    q=integer(q,0,999999 if separate else 1,'油條份數' if separate else '同種加料只能選一份')
+    if not q: continue
+    if a['name'] in selected_names: raise Problem('加料不可選擇同一種類')
+    selected_names.add(a['name'])
+    if not separate: count+=q
+    unit+=a['price']*q; line['extras'].append({'id':aid,'name':a['name']+('（另外包裝）' if separate else ''),'qty':q,'price':a['price'],'separate':separate})
+   if count>2: raise Problem('每碗最多選兩種不同加料')
   else: unit=p['price']; line['qty']=integer(item.get('qty',1),1,20,'滷味份數')
   line['unit_price']=unit; line['subtotal']=unit*line['qty']; lines.append(line)
  return {'items':lines,'total':sum(x['subtotal'] for x in lines)}
@@ -110,9 +124,11 @@ def order_text(o,config):
  for n,i in enumerate(o['items'],1):
   title=f"{n}. {i['name']}"+(' '+('大碗' if i['size']=='large' else '小碗') if i['size'] else '')+f" ×{i['qty']}  ${i['subtotal']}"
   if i['category']=='noodle': title+='\n'+i['spicy']+'；不加：'+('、'.join(i['omit']) or '無')+'；加料：'+('、'.join(x['name']+'×'+str(x['qty']) for x in i['extras']) or '無')+('；香菜換九層塔' if i['basil'] else '')
+  if i.get('note'): title+='\n這份備註：'+i['note']
   parts.append(title)
  parts+=['━━━━━━━━━━━━','訂單總計  NT$ '+str(o['total']),'付款方式  現場付款・'+('已收款' if o['payment_status']=='paid' else '尚未付款')]
  if o['note']: parts.append('備註：'+o['note'])
+ parts.append('餐具：'+('需要' if o.get('utensils',True) else '不需要'))
  if config['address']: parts.append('取餐地址：'+config['address'])
  if config['phone']: parts.append('店家電話：'+config['phone'])
  parts.append('訂單已登記，店家正在確認與安排製作。')
@@ -137,8 +153,10 @@ def order_cards(o,config,owner=False):
     if i['extras']: details.append('加料：'+'、'.join(x['name']+' ×'+str(x['qty']) for x in i['extras']))
     if i['basil']: details.append('香菜換九層塔')
     row['contents'].append(text(' / '.join(details),'xs','#687C71'))
+   if i.get('note'): row['contents'].append(text('這份備註：'+i['note'],'xs','#865D22'))
    body.append(row)
   body.extend([rule(),text('訂單總額','sm','#687C71'),text('NT$ '+str(o['total']),'xxl',weight='bold'),box([text('現場付款 · '+('已收款' if o['payment_status']=='paid' else '尚未付款'),'sm','#865D22')],backgroundColor='#FFF2DB',paddingAll='md',cornerRadius='md')])
+  body.append(text('餐具：'+('需要' if o.get('utensils',True) else '不需要'),'sm',weight='bold'))
   if o['note']: body.extend([text('訂單備註','sm',weight='bold'),text(o['note'])])
   if config['address']: body.extend([rule(),text('取餐地址','xs','#687C71'),text(config['address'])])
   if config['phone']: body.append(text('店家電話 '+config['phone']))
@@ -171,6 +189,8 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  if type(data.get('expected_total')) is not int or data.get('expected_total')!=priced['total']: raise Problem('菜單價格已更新，請返回購物車重新確認金額。',409)
  created=(now or datetime.now(TZ)).isoformat(timespec='seconds')
  o={**priced,'id':'CJ'+(now or datetime.now(TZ)).strftime('%m%d')+'-'+secrets.token_hex(4).upper(),'name':name,'phone':phone,'pickup':pickup,'note':note,'status':'new','source':'line','external_order_id':None,'print_status':'not_connected','payment_method':'cash','payment_status':'unpaid','created_at':created,'demo':demo}
+ if type(data.get('utensils',True)) is not bool: raise Problem('請確認餐具選項')
+ o['utensils']=data.get('utensils',True)
  db.execute('INSERT INTO web_orders VALUES (?,?,?,?,?)',(o['id'],user,idem,js(o),created))
  if not demo:
   enqueue(db,o['id'],user,'customer',order_cards(o,config))

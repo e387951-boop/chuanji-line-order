@@ -1,5 +1,5 @@
 """LINE web ordering + owner console. Python standard library, persistent SQLite."""
-import argparse, base64, hashlib, hmac, json, os, re, secrets, threading, time
+import argparse, base64, csv, hashlib, hmac, io, json, os, re, secrets, sqlite3, threading, time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from http.cookies import SimpleCookie
@@ -36,9 +36,10 @@ def deliver(db,token):
 
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*args): pass
- def respond(self,status,payload,mime='application/json; charset=utf-8'):
+ def respond(self,status,payload,mime='application/json; charset=utf-8',filename=None):
   body=payload if isinstance(payload,bytes) else (js(payload) if mime.startswith('application/json') else payload).encode()
   self.send_response(status); self.send_header('Content-Type',mime); self.send_header('Content-Length',str(len(body))); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff'); self.send_header('Referrer-Policy','no-referrer')
+  if filename: self.send_header('Content-Disposition','attachment; filename="'+filename+'"')
   self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' https://static.line-scdn.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.line.me https://*.line-scdn.net; frame-src https://*.line.me; frame-ancestors 'none'; object-src 'none'; base-uri 'self'")
   if getattr(self,'new_cookie',None): self.send_header('Set-Cookie',self.new_cookie)
   self.end_headers(); self.wfile.write(body)
@@ -67,7 +68,11 @@ class Handler(BaseHTTPRequestHandler):
    if path in files:
     f=files[path]; mime='text/html' if f.endswith('.html') else 'text/javascript' if f.endswith('.js') else 'text/css'
     return self.respond(200,(ROOT/f).read_text(encoding='utf-8-sig'),mime+'; charset=utf-8')
-   if path=='/health': return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live'})
+   if path=='/health':
+    with LOCK: self.server.db.execute('SELECT 1').fetchone()
+    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-09-20-options-v2'})
+   if path=='/logo.jpg': return self.respond(200,(ROOT/'logo.jpg').read_bytes(),'image/jpeg')
+   if path=='/warm.css': return self.respond(200,(ROOT/'warm.css').read_bytes(),'text/css; charset=utf-8')
    if path.startswith('/media/'):
     with LOCK: row=self.server.db.execute('SELECT * FROM photos WHERE id=?',(path.split('/')[-1],)).fetchone()
     if not row: raise Problem('找不到照片',404)
@@ -85,6 +90,23 @@ class Handler(BaseHTTPRequestHandler):
      o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
+     if path=='/api/admin/backup':
+      backup=sqlite3.connect(':memory:')
+      try:
+       db.backup(backup)
+       backup.execute('DELETE FROM web_sessions'); backup.commit()
+       raw=backup.serialize()
+      finally: backup.close()
+      return self.respond(200,raw,'application/octet-stream','chuanji-backup.sqlite3')
+     if path=='/api/admin/export':
+      output=io.StringIO(); writer=csv.writer(output)
+      writer.writerow(['訂單編號','下單時間','取餐時間','姓名','手機','狀態','付款狀態','金額','餐點明細','備註'])
+      def safe(value):
+       value=str(value)
+       return "'"+value if value.lstrip().startswith(('=','+','-','@')) else value
+      for o in get_orders(db,q.get('start',[''])[0],q.get('end',[''])[0]):
+       writer.writerow([safe(v) for v in [o['id'],o['created_at'],o['pickup'],o['name'],o['phone'],STATUSES[o['status']],'已收款' if o['payment_status']=='paid' else '尚未收款',o['total'],order_text(o,settings(db)),o['note']]])
+      return self.respond(200,output.getvalue().encode('utf-8-sig'),'text/csv; charset=utf-8','chuanji-orders.csv')
      if path=='/api/admin/catalog': return self.respond(200,{'products':catalogue(db,True),'settings':settings(db)})
      if path=='/api/admin/orders':
       orders=get_orders(db,q.get('start',[''])[0],q.get('end',[''])[0])
@@ -167,7 +189,9 @@ def main():
  config={'liff_id':os.getenv('LIFF_ID',''),'channel_id':os.getenv('LINE_LOGIN_CHANNEL_ID',''),'token':os.getenv('LINE_CHANNEL_ACCESS_TOKEN',''),'owner':os.getenv('LINE_OWNER_USER_ID',''),'origin':os.getenv('PUBLIC_ORIGIN','').rstrip('/'),'admin_password':os.getenv('ADMIN_PASSWORD','')}
  if not args.demo and (not all(config[k] for k in ('liff_id','channel_id','token','origin','admin_password')) or not config['origin'].startswith('https://') or len(config['admin_password'])<12): p.error('Live mode requires LIFF_ID, LINE_LOGIN_CHANNEL_ID, LINE_CHANNEL_ACCESS_TOKEN, HTTPS PUBLIC_ORIGIN and ADMIN_PASSWORD (12+ characters).')
  path=Path(os.getenv('WEB_ORDER_DB',str(ROOT/('web-demo.sqlite3' if args.demo else 'web-orders.sqlite3'))));path.parent.mkdir(parents=True,exist_ok=True)
- db=connect(str(path));server=ThreadingHTTPServer(('127.0.0.1' if args.demo else '0.0.0.0',args.port),Handler); server.demo=args.demo;server.db=db
+ use_postgres=not args.demo and bool(os.getenv('PGHOST'))
+ if use_postgres and not all(os.getenv(k) for k in ('PGUSER','PGPASSWORD')): p.error('Postgres requires PGUSER and PGPASSWORD')
+ db=connect(str(path),postgres=use_postgres);server=ThreadingHTTPServer(('127.0.0.1' if args.demo else '0.0.0.0',args.port),Handler); server.demo=args.demo;server.db=db
  for k,v in config.items():setattr(server,k,v)
  if not args.demo:threading.Thread(target=deliver,args=(db,config['token']),daemon=True).start()
  print('Chuanji storefront and admin on '+str(args.port),flush=True);server.serve_forever()

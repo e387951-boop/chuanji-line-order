@@ -1,0 +1,22 @@
+/* Warm paper and ink palette inspired by the supplied Chuanji logo. */
+:root{--green:#69432c;--green2:#895c3b;--pale:#f3eadc;--bg:#faf6ee;--ink:#3e3026;--muted:#7b6b5b;--border:#e5d9c7;--orange:#a55c32}
+body.customer{background:#f3eadc}
+.customer #app{background:var(--bg)}
+.shop-logo{width:52px;height:52px;border-radius:50%;object-fit:cover;flex-shrink:0}
+.shop-header,.sheet-head,.sheet-foot,.bottom-bar{background:#fffaf3}
+.store-banner{background:linear-gradient(130deg,#f4e7ce,#fbf5ea);border:1px solid #e8d8bb;border-radius:20px;padding:26px 22px;margin-bottom:20px}
+.store-banner,.store-banner h1{color:#513922}.store-banner p,.store-banner .address,.store-banner .mini-label{color:#77614a}
+.store-banner h1,.page-title h1,.sheet-head h2{font-family:'Noto Serif TC','PMingLiU',serif;letter-spacing:1px}
+.product-row,.cart-card,.form-card,.receipt,.history-card{background:#fffdf8;border-color:var(--border);box-shadow:0 3px 14px #73502c06}
+.food-placeholder{background:#efe2cc;color:#795231}
+.primary{background:var(--green);color:#fffaf3}
+.primary:hover{background:var(--green2)}
+.success-icon,.order-code,.confirmation-note{background:#eee1cb;color:#69432c}
+.receipt-item p{color:var(--muted)}
+.item-note{margin-top:22px}.item-note-summary{color:#895c3b!important}
+.basil{margin-bottom:18px}
+input:focus,textarea:focus,select:focus{outline-color:#a77e51}
+.stepper button:disabled{background:#ede6dc;opacity:.55}
+.addon-row .separate-addon{display:block;margin-left:0;font-size:11px;color:var(--muted)}
+#toast{background:#4e382bea}
+@media(max-width:360px){.shop-logo{width:43px;height:43px}.store-banner{padding:21px 16px}}

@@ -134,6 +134,14 @@ def order_text(o,config):
  parts.append('訂單已登記，店家正在確認與安排製作。')
  return '\n'.join(parts)
 
+def customer_chat_card(o,liff_id):
+ # The detail endpoint remains restricted to the authenticated order owner.
+ def text(value,size='sm',weight='regular',color='#44372D'):
+  return {'type':'text','text':str(value),'size':size,'weight':weight,'color':color,'wrap':True}
+ body=[text('川記麵線糊','lg','bold'),text('到店自取','xl','bold','#986C43'),text('訂單已送出，待店家確認'),{'type':'separator','margin':'lg'},text('訂單編號：'+o['id']),text('取餐時間：'+o['pickup']),text('付款方式：現場付款'),text('NT$ '+str(o['total']),'xxl','bold','#B06D38')]
+ bubble={'type':'bubble','body':{'type':'box','layout':'vertical','spacing':'md','contents':body},'footer':{'type':'box','layout':'vertical','contents':[{'type':'button','style':'primary','color':'#986C43','action':{'type':'uri','label':'訂單明細','uri':'https://liff.line.me/'+liff_id+'/#order/'+o['id']}}]}}
+ return [{'type':'flex','altText':'川記訂單 '+o['id']+'｜NT$ '+str(o['total']),'contents':bubble}]
+
 def chat_receipt_messages(o,config):
  # Only call with a stored, authorized order; never trust a browser-provided total.
  text='【網頁訂單紀錄｜請店家確認】\n'+order_text(o,config)

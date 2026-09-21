@@ -71,6 +71,7 @@ class Handler(BaseHTTPRequestHandler):
    if path=='/health':
     with LOCK: self.server.db.execute('SELECT 1').fetchone()
     return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-09-20-options-v2'})
+   if path=='/staff-entrance.jpg': return self.respond(200,(ROOT/'staff-entrance.jpg').read_bytes(),'image/jpeg')
    if path=='/admin-greeting.jpg': return self.respond(200,(ROOT/'admin-greeting.jpg').read_bytes(),'image/jpeg')
    if path=='/logo.jpg': return self.respond(200,(ROOT/'logo.jpg').read_bytes(),'image/jpeg')
    if path=='/warm.css': return self.respond(200,(ROOT/'warm.css').read_bytes(),'text/css; charset=utf-8')
@@ -88,7 +89,7 @@ class Handler(BaseHTTPRequestHandler):
     if path.startswith('/api/order/'):
      self.customer(s); row=db.execute('SELECT data FROM web_orders WHERE id=? AND user_id=?',(path.split('/')[-1],s['user_id'])).fetchone()
      if not row: raise Problem('找不到訂單',404)
-     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['chat_messages']=chat_receipt_messages(o,settings(db)); return self.respond(200,o)
+     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/backup':
@@ -148,7 +149,7 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/orders':
      self.customer(s); o=place_order(db,s['user_id'],data,self.server.demo,self.server.owner)
      # Commit before responding before reporting successful order creation (storage persistence depends on deployment).
-     db.commit(); o['notifications']=self.notifications(o['id']); o['chat_messages']=chat_receipt_messages(o,settings(db)); return self.respond(200,o)
+     db.commit(); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/bind-notifications':

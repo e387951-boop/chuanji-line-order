@@ -4,7 +4,7 @@ const {send,available}=require('./chat_receipt.js');
  const values=new Map(),storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};
  const order={id:'CJ-test',chat_messages:[{type:'text',text:'已成立訂單 NT$ 165'}]};
  let calls=0;
- const liff={isInClient:()=>true,getContext:()=>({type:'utou'}),isApiAvailable:()=>true,sendMessages:async messages=>{calls++;assert.deepEqual(messages,order.chat_messages)}};
+ const liff={isInClient:()=>true,getContext:()=>({type:'utou'}),isApiAvailable:()=>{throw Error("unsupported availability API")},sendMessages:async messages=>{calls++;assert.deepEqual(messages,order.chat_messages)}};
  assert.equal(available({...liff,getContext:()=>({type:'group'})}),false);
  assert.equal(await send(order,{...liff,isInClient:()=>false},storage),'unavailable');
  assert.equal(calls,0);

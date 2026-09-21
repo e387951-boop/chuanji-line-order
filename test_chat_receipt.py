@@ -1,5 +1,5 @@
 import unittest
-from web_store import connect, price_cart, settings, chat_receipt_messages
+from web_store import connect, price_cart, settings, chat_receipt_messages, customer_chat_card
 
 class ChatReceiptTests(unittest.TestCase):
  def setUp(self): self.db=connect(':memory:')
@@ -13,6 +13,12 @@ class ChatReceiptTests(unittest.TestCase):
   for expected in ('CJ-TEST','165','另外包','油條（另外包裝）×2','餐具：不需要','訂單備註'):
    self.assertIn(expected,text)
   self.assertTrue(all(m['type']=='text' for m in messages))
+ def test_flex_card_uses_saved_order_and_authenticated_detail_link(self):
+  card=customer_chat_card(self.order(),'123-test')[0]
+  self.assertEqual(card['type'],'flex')
+  action=card['contents']['footer']['contents'][0]['action']
+  self.assertEqual(action['uri'],'https://liff.line.me/123-test/#order/CJ-TEST')
+  self.assertIn('165',card['altText'])
  def test_large_unicode_orders_fit_line_limits(self):
   order=self.order();order['items']=order['items']*40
   for item in order['items']: item['note']='🍜'*120

@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict');
+const {send,available}=require('./chat_receipt.js');
+(async()=>{
+ const values=new Map(),storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};
+ const order={id:'CJ-test',chat_messages:[{type:'text',text:'已成立訂單 NT$ 165'}]};
+ let calls=0;
+ const liff={isInClient:()=>true,getContext:()=>({type:'utou'}),isApiAvailable:()=>true,sendMessages:async messages=>{calls++;assert.deepEqual(messages,order.chat_messages)}};
+ assert.equal(available({...liff,getContext:()=>({type:'group'})}),false);
+ assert.equal(await send(order,{...liff,isInClient:()=>false},storage),'unavailable');
+ assert.equal(calls,0);
+ assert.equal(await send(order,{...liff,sendMessages:async()=>{throw Error('network')}},storage),'failed');
+ assert.equal(values.size,0);
+ assert.equal(await send(order,liff,storage),'sent');
+ assert.equal(await send(order,liff,storage),'sent');assert.equal(calls,1);
+ let release; const slow={...liff,sendMessages:()=>new Promise(resolve=>{release=resolve})};
+ const other={...order,id:'CJ-other'};const first=send(other,slow,storage);
+ assert.equal(await send(other,slow,storage),'pending');release();assert.equal(await first,'sent');
+ assert.equal(await send({...order,id:'demo',demo:true},liff,storage),'unavailable');
+ console.log('Chat receipt: success, failure, retry, duplicate, demo and group protection passed');
+})().catch(e=>{console.error(e);process.exitCode=1});

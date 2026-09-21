@@ -64,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
   self.new_cookie=None
   try:
    parsed=urlsplit(self.path); path=parsed.path; q=parse_qs(parsed.query)
-   files={'/':'store.html','/admin':'admin.html','/store.js':'store.js','/admin.js':'admin.js','/web.css':'web.css'}
+   files={'/':'store.html','/admin':'admin.html','/store.js':'store.js','/chat_receipt.js':'chat_receipt.js','/admin.js':'admin.js','/web.css':'web.css'}
    if path in files:
     f=files[path]; mime='text/html' if f.endswith('.html') else 'text/javascript' if f.endswith('.js') else 'text/css'
     return self.respond(200,(ROOT/f).read_text(encoding='utf-8-sig'),mime+'; charset=utf-8')
@@ -87,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
     if path.startswith('/api/order/'):
      self.customer(s); row=db.execute('SELECT data FROM web_orders WHERE id=? AND user_id=?',(path.split('/')[-1],s['user_id'])).fetchone()
      if not row: raise Problem('找不到訂單',404)
-     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); return self.respond(200,o)
+     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['chat_messages']=chat_receipt_messages(o,settings(db)); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/backup':
@@ -146,8 +146,8 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/quote': return self.respond(200,price_cart(db,data.get('items')))
     if path=='/api/orders':
      self.customer(s); o=place_order(db,s['user_id'],data,self.server.demo,self.server.owner)
-     # Commit before responding so a browser receipt always means durable storage.
-     db.commit(); o['notifications']=self.notifications(o['id']); return self.respond(200,o)
+     # Commit before responding before reporting successful order creation (storage persistence depends on deployment).
+     db.commit(); o['notifications']=self.notifications(o['id']); o['chat_messages']=chat_receipt_messages(o,settings(db)); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/bind-notifications':

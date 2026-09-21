@@ -134,6 +134,22 @@ def order_text(o,config):
  parts.append('訂單已登記，店家正在確認與安排製作。')
  return '\n'.join(parts)
 
+def chat_receipt_messages(o,config):
+ # Only call with a stored, authorized order; never trust a browser-provided total.
+ text='【網頁訂單紀錄｜請店家確認】\n'+order_text(o,config)
+ chunks=[]; current=''; units=0
+ for char in text:
+  width=2 if ord(char)>0xffff else 1
+  if units+width>4500:
+   chunks.append(current); current=''; units=0
+  current+=char; units+=width
+ if current: chunks.append(current)
+ # Extremely long customized orders retain the summary, with explicit disclosure.
+ if len(chunks)>5:
+  text=f"【網頁訂單紀錄】\n訂單編號：{o['id']}\n取餐：{o['pickup']}\n姓名：{o['name']}\n電話：{o['phone']}\n總額：NT$ {o['total']}\n餐點明細較長，請店家依訂單編號至後台查看完整明細。"
+  chunks=[text]
+ return [{'type':'text','text':chunk} for chunk in chunks]
+
 def order_cards(o,config,owner=False):
  def text(value,size='sm',color='#263D35',weight='regular'):
   return {'type':'text','text':str(value) or '—','size':size,'color':color,'weight':weight,'wrap':True}

@@ -71,6 +71,7 @@ class Handler(BaseHTTPRequestHandler):
    if path=='/health':
     with LOCK: self.server.db.execute('SELECT 1').fetchone()
     return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-09-20-options-v2'})
+   if path=='/admin-greeting.jpg': return self.respond(200,(ROOT/'admin-greeting.jpg').read_bytes(),'image/jpeg')
    if path=='/logo.jpg': return self.respond(200,(ROOT/'logo.jpg').read_bytes(),'image/jpeg')
    if path=='/warm.css': return self.respond(200,(ROOT/'warm.css').read_bytes(),'text/css; charset=utf-8')
    if path.startswith('/media/'):

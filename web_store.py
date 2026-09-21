@@ -52,7 +52,7 @@ def catalogue(db,all_items=False):
   if p['category']=='addon':
    if p['name'] not in ADDON_NAMES and not all_items: continue
    p['name']={'鮮蚵':'蚵仔','魷魚':'發魷魚'}.get(p['name'],p['name'])
-  if all_items or p['active']: items.append(p)
+  items.append(p)  # Keep unavailable products visible; price_cart rejects them.
  return items
 
 def save_product(db,data):

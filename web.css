@@ -3,3 +3,4 @@
 .product-row.sold-out{filter:grayscale(1);opacity:.58;cursor:not-allowed;background:#eeece8}.sold-out-label{flex-shrink:0;font-size:14px;font-weight:700;color:#555;background:#ddd;padding:7px 10px;border-radius:20px}.admin-greeting{display:block;width:100%;height:auto;border-radius:16px;margin:20px 0 14px}.login-card .admin-greeting-text{font-size:clamp(21px,5vw,29px);line-height:1.45}
 
 body.admin.at-entrance{background:#171820;margin:0}.staff-entrance{min-height:100vh;min-height:100dvh;display:flex;justify-content:center;align-items:center}.staff-scene{position:relative;width:min(100vw,56.25vh);width:min(100vw,56.25dvh);line-height:0}.staff-scene>img{display:block;width:100%;height:auto}.staff-door{position:absolute;left:68.6%;top:27.8%;width:17.7%;height:6.6%;clip-path:polygon(0 26%,95% 0,100% 78%,0 100%);border:0;background:transparent;padding:0;cursor:pointer}.staff-door:focus-visible{outline:none;background:rgba(255,226,153,.45)}
+.staff-entrance{width:100%}

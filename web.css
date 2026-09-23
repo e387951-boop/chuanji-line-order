@@ -4,3 +4,7 @@
 
 body.admin.at-entrance{background:#171820;margin:0}.staff-entrance{min-height:100vh;min-height:100dvh;display:flex;justify-content:center;align-items:center}.staff-scene{position:relative;width:min(100vw,56.25vh);width:min(100vw,56.25dvh);line-height:0}.staff-scene>img{display:block;width:100%;height:auto}.staff-door{position:absolute;left:68.6%;top:27.8%;width:17.7%;height:6.6%;clip-path:polygon(0 26%,95% 0,100% 78%,0 100%);border:0;background:transparent;padding:0;cursor:pointer}.staff-door:focus-visible{outline:none;background:rgba(255,226,153,.45)}
 .staff-entrance{width:100%}
+
+.returning-card{margin:20px 0;padding:20px;border:1px solid #ddcdb7;border-radius:18px;background:#faf4e9}.returning-card h2{font-size:19px;margin:9px 0}.returning-card p{line-height:1.6}.returning-card small{display:block;color:#786a5d;margin-bottom:16px}.history-repeat{margin-bottom:20px}.history-repeat .history-card{margin-bottom:8px}
+
+.success-title .order-code{display:block;font-size:48px;letter-spacing:6px;margin:18px 0;font-weight:800}

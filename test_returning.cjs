@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict');
+const {toCart,load,save}=require('./returning.js');
+const old={id:'old-id',created_at:'2026-09-20',name:'測試',phone:'0912345678',pickup:'2026-09-20 12:00',items:[{product_id:'n0',size:'large',qty:1,spicy:'微辣',omit:['香菜'],basil:true,note:'分袋',extras:[{id:'a0',qty:1,price:20},{id:'a5',qty:4,price:15}],subtotal:999},{product_id:'s0',qty:3,extras:[]}],total:999};
+const cart=toCart(old);
+assert.deepEqual(cart[0].extras,{a0:1,a5:4});
+assert.equal(cart[1].qty,3);assert.equal(cart[0].note,'分袋');
+assert.equal(cart[0].subtotal,undefined);assert.equal(cart[0].pickup,undefined);
+cart[0].omit.push('蒜泥');assert.deepEqual(old.items[0].omit,['香菜']);
+const map=new Map(),storage={getItem:k=>map.get(k)||null,setItem:(k,v)=>map.set(k,v)};
+save(storage,'customer-a',old);assert.equal(load(storage,'customer-a').phone,old.phone);
+assert.equal(load(storage,'customer-b'),null);assert.equal(load(storage,''),null);
+save(storage,'customer-b',{...old,demo:true});assert.equal(load(storage,'customer-b'),null);
+const blocked={getItem(){throw Error('blocked')},setItem(){throw Error('blocked')}};
+assert.equal(load(blocked,'a'),null);assert.doesNotThrow(()=>save(blocked,'a',old));
+assert.throws(()=>toCart({items:[]}));console.log('Returning customer tests passed');

@@ -3,6 +3,7 @@ import os
 import re
 
 COLUMNS = {
+ 'pickup_numbers': 'pickup_date,number,order_id',
  'web_settings': 'id,data',
  'products': 'id,data,version',
  'photos': 'id,mime,data',

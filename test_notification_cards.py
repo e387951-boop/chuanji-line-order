@@ -15,7 +15,7 @@ class CardTests(unittest.TestCase):
   self.assertTrue(all(p['messages'][0]['type']=='flex' for p in payloads))
   self.assertIn('訂單已送出',payloads[0]['messages'][0]['altText']);self.assertIn('店家新訂單',payloads[1]['messages'][0]['altText'])
   rendered=json.dumps(payloads,ensure_ascii=False)
-  for value in ['微辣','香菜換九層塔','請分袋',o['id'],str(o['total'])]: self.assertIn(value,rendered)
+  for value in ['微辣','香菜換九層塔','請分袋',o['pickup_number'],str(o['total'])]: self.assertIn(value,rendered)
  def test_forty_bowls_preserved_and_within_limits(self):
   o=self.order(40);messages=order_cards(o,settings(self.db));self.assertLessEqual(len(messages),5)
   bubbles=[]

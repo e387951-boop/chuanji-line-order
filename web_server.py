@@ -64,13 +64,13 @@ class Handler(BaseHTTPRequestHandler):
   self.new_cookie=None
   try:
    parsed=urlsplit(self.path); path=parsed.path; q=parse_qs(parsed.query)
-   files={'/':'store.html','/admin':'admin.html','/store.js':'store.js','/chat_receipt.js':'chat_receipt.js','/admin.js':'admin.js','/web.css':'web.css'}
+   files={'/':'store.html','/admin':'admin.html','/returning.js':'returning.js','/store.js':'store.js','/chat_receipt.js':'chat_receipt.js','/admin.js':'admin.js','/web.css':'web.css'}
    if path in files:
     f=files[path]; mime='text/html' if f.endswith('.html') else 'text/javascript' if f.endswith('.js') else 'text/css'
     return self.respond(200,(ROOT/f).read_text(encoding='utf-8-sig'),mime+'; charset=utf-8')
    if path=='/health':
     with LOCK: self.server.db.execute('SELECT 1').fetchone()
-    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-09-20-options-v2'})
+    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-09-23-returning-pickup-v1'})
    if path=='/staff-entrance.jpg': return self.respond(200,(ROOT/'staff-entrance.jpg').read_bytes(),'image/jpeg')
    if path=='/admin-greeting.jpg': return self.respond(200,(ROOT/'admin-greeting.jpg').read_bytes(),'image/jpeg')
    if path=='/logo.jpg': return self.respond(200,(ROOT/'logo.jpg').read_bytes(),'image/jpeg')
@@ -107,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
        value=str(value)
        return "'"+value if value.lstrip().startswith(('=','+','-','@')) else value
       for o in get_orders(db,q.get('start',[''])[0],q.get('end',[''])[0]):
-       writer.writerow([safe(v) for v in [o['id'],o['created_at'],o['pickup'],o['name'],o['phone'],STATUSES[o['status']],'已收款' if o['payment_status']=='paid' else '尚未收款',o['total'],order_text(o,settings(db)),o['note']]])
+       writer.writerow([safe(v) for v in [o.get('pickup_number',o['id']),o['created_at'],o['pickup'],o['name'],o['phone'],STATUSES[o['status']],'已收款' if o['payment_status']=='paid' else '尚未收款',o['total'],order_text(o,settings(db)),o['note']]])
       return self.respond(200,output.getvalue().encode('utf-8-sig'),'text/csv; charset=utf-8','chuanji-orders.csv')
      if path=='/api/admin/catalog': return self.respond(200,{'products':catalogue(db,True),'settings':settings(db)})
      if path=='/api/admin/orders':
@@ -135,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
     if self.server.demo: raise Problem('試用版不需要 LINE 登入')
     user=verify_line_id(data.get('id_token'),self.server.channel_id)
     with LOCK,db: db.execute('UPDATE web_sessions SET user_id=? WHERE id=?',(user,s['id']))
-    return self.respond(200,{'ok':True})
+    return self.respond(200,{'ok':True,'customer_key':hashlib.sha256(('returning:'+user).encode()).hexdigest()})
    if path=='/api/admin/login':
     ip=self.client_address[0]; stamp=time.time(); attempts=[x for x in LOGIN_TRIES.get(ip,[]) if x>stamp-600]
     if len(attempts)>=5: raise Problem('嘗試次數過多，請10分鐘後再試',429)

@@ -28,6 +28,7 @@ def connect(path,postgres=False):
  CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, data TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
  CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS web_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, idem TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(user_id,idem));
+ CREATE TABLE IF NOT EXISTS pickup_numbers (pickup_date TEXT NOT NULL, number TEXT NOT NULL, order_id TEXT NOT NULL UNIQUE, PRIMARY KEY(pickup_date,number));
  CREATE TABLE IF NOT EXISTS web_outbox (id TEXT PRIMARY KEY, order_id TEXT, recipient TEXT, payload TEXT, retry_key TEXT, attempts INTEGER DEFAULT 0, due REAL DEFAULT 0, state TEXT DEFAULT 'queued');
  CREATE TABLE IF NOT EXISTS notification_owners (user_id TEXT PRIMARY KEY, created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS web_sessions (id TEXT PRIMARY KEY, csrf TEXT, user_id TEXT, admin INTEGER DEFAULT 0, expires REAL);
@@ -120,7 +121,7 @@ def pickup_check(text,config,now=None):
  return dt.strftime('%Y-%m-%d %H:%M')
 
 def order_text(o,config):
- parts=[config['name']+'｜下單完成', '━━━━━━━━━━━━', '訂單編號  '+o['id'], '取餐時間  '+o['pickup'], '取餐姓名  '+o['name'], '聯絡電話  '+o['phone'], '━━━━━━━━━━━━']
+ parts=[config['name']+'｜下單完成', '━━━━━━━━━━━━', '訂單編號  '+o.get('pickup_number',o['id']), '取餐時間  '+o['pickup'], '取餐姓名  '+o['name'], '聯絡電話  '+o['phone'], '━━━━━━━━━━━━']
  for n,i in enumerate(o['items'],1):
   title=f"{n}. {i['name']}"+(' '+('大碗' if i['size']=='large' else '小碗') if i['size'] else '')+f" ×{i['qty']}  ${i['subtotal']}"
   if i['category']=='noodle': title+='\n'+i['spicy']+'；不加：'+('、'.join(i['omit']) or '無')+'；加料：'+('、'.join(x['name']+'×'+str(x['qty']) for x in i['extras']) or '無')+('；香菜換九層塔' if i['basil'] else '')
@@ -138,9 +139,9 @@ def customer_chat_card(o,liff_id):
  # The detail endpoint remains restricted to the authenticated order owner.
  def text(value,size='sm',weight='regular',color='#44372D'):
   return {'type':'text','text':str(value),'size':size,'weight':weight,'color':color,'wrap':True}
- body=[text('川記麵線糊','lg','bold'),text('到店自取','xl','bold','#986C43'),text('訂單已送出，待店家確認'),{'type':'separator','margin':'lg'},text('訂單編號：'+o['id']),text('取餐時間：'+o['pickup']),text('付款方式：現場付款'),text('NT$ '+str(o['total']),'xxl','bold','#B06D38')]
+ body=[text('川記麵線糊','lg','bold'),text('到店自取','xl','bold','#986C43'),text('訂單已送出，待店家確認'),{'type':'separator','margin':'lg'},text('訂單編號'),text(o.get('pickup_number',o['id']),'48px','bold'),text('取餐時間：'+o['pickup']),text('付款方式：現場付款'),text('NT$ '+str(o['total']),'xxl','bold','#B06D38')]
  bubble={'type':'bubble','body':{'type':'box','layout':'vertical','spacing':'md','contents':body},'footer':{'type':'box','layout':'vertical','contents':[{'type':'button','style':'primary','color':'#986C43','action':{'type':'uri','label':'訂單明細','uri':'https://liff.line.me/'+liff_id+'/#order/'+o['id']}}]}}
- return [{'type':'flex','altText':'川記訂單 '+o['id']+'｜NT$ '+str(o['total']),'contents':bubble}]
+ return [{'type':'flex','altText':'川記訂單 '+o.get('pickup_number',o['id'])+'｜NT$ '+str(o['total']),'contents':bubble}]
 
 def chat_receipt_messages(o,config):
  # Only call with a stored, authorized order; never trust a browser-provided total.
@@ -154,7 +155,7 @@ def chat_receipt_messages(o,config):
  if current: chunks.append(current)
  # Extremely long customized orders retain the summary, with explicit disclosure.
  if len(chunks)>5:
-  text=f"【網頁訂單紀錄】\n訂單編號：{o['id']}\n取餐：{o['pickup']}\n姓名：{o['name']}\n電話：{o['phone']}\n總額：NT$ {o['total']}\n餐點明細較長，請店家依訂單編號至後台查看完整明細。"
+  text=f"【網頁訂單紀錄】\n訂單編號：{o.get('pickup_number',o['id'])}\n取餐：{o['pickup']}\n姓名：{o['name']}\n電話：{o['phone']}\n總額：NT$ {o['total']}\n餐點明細較長，請店家依訂單編號至後台查看完整明細。"
   chunks=[text]
  return [{'type':'text','text':chunk} for chunk in chunks]
 
@@ -167,7 +168,7 @@ def order_cards(o,config,owner=False):
  bubbles=[]
  # Paginate rather than dropping bowls or customization on larger orders.
  for start in range(0,len(o['items']),5):
-  body=[text('到店自取','sm','#687C71'),text(o['pickup'],'xl',weight='bold'),text('訂單編號 '+o['id'],'xs','#687C71'),rule(),text('取餐人  '+o['name']+' · '+o['phone']),rule()]
+  body=[text('到店自取','sm','#687C71'),text(o['pickup'],'xl',weight='bold'),text('訂單編號','sm','#687C71'),text(o.get('pickup_number',o['id']),'48px',weight='bold'),rule(),text('取餐人  '+o['name']+' · '+o['phone']),rule()]
   for n,i in enumerate(o['items'][start:start+5],start+1):
    size=(' 大碗' if i['size']=='large' else ' 小碗') if i['size'] else ''
    row=box([text(str(n)+'. '+i['name']+size,'md',weight='bold'),text('×'+str(i['qty'])+'　NT$ '+str(i['subtotal']),'sm','#24654F',weight='bold')],spacing='xs',margin='lg')
@@ -187,13 +188,23 @@ def order_cards(o,config,owner=False):
   body.append(text('請至後台確認訂單並安排製作。' if owner else '訂單已登記，店家正在確認與安排製作。','xs','#687C71'))
   if len(o['items'])>5: body.append(text('餐點明細 '+str(start//5+1)+' / '+str((len(o['items'])+4)//5)+' · 總額為整筆訂單','xs','#687C71'))
   bubbles.append({'type':'bubble','size':'mega','header':box([text(config['name'],'lg','#FFFFFF','bold'),text(title,'sm','#E4D9BE')],backgroundColor='#174B3B',paddingAll='xl',spacing='sm'),'body':box(body,paddingAll='xl',spacing='sm',backgroundColor='#FFFFFF')})
- return [{'type':'flex','altText':(config['name']+'｜'+title+'｜'+o['id']+'｜NT$ '+str(o['total']))[:400],'contents':group[0] if len(group)==1 else {'type':'carousel','contents':group}} for group in [bubbles[k:k+4] for k in range(0,len(bubbles),4)]]
+ return [{'type':'flex','altText':(config['name']+'｜'+title+'｜'+o.get('pickup_number',o['id'])+'｜NT$ '+str(o['total']))[:400],'contents':group[0] if len(group)==1 else {'type':'carousel','contents':group}} for group in [bubbles[k:k+4] for k in range(0,len(bubbles),4)]]
 
 def enqueue(db,order_id,recipient,kind,text):
  # Split long orders into LINE's allowed text message sizes, preserving all bowls.
  chunks=[text[i:i+4500] for i in range(0,len(text),4500)] if isinstance(text,str) else []
  payload={'to':recipient,'messages':[{'type':'text','text':c} for c in chunks[:5]] if isinstance(text,str) else text}
  db.execute('INSERT INTO web_outbox(id,order_id,recipient,payload,retry_key) VALUES (?,?,?,?,?)',(order_id+':'+kind,order_id,recipient,js(payload),str(uuid.uuid4())))
+
+def reserve_pickup_number(db,pickup,order_id):
+ # A date-scoped reservation lives in the same transaction as the order.
+ # Never release cancelled numbers: old receipts must remain unambiguous.
+ used={r[0] for r in db.execute('SELECT number FROM pickup_numbers WHERE pickup_date=?',(pickup[:10],))}
+ available=[str(n) for n in range(1000,10000) if str(n) not in used]
+ if not available: raise Problem('這個取餐日期的訂單已滿，請選擇其他日期。',409)
+ number=secrets.choice(available)
+ db.execute('INSERT INTO pickup_numbers(pickup_date,number,order_id) VALUES (?,?,?)',(pickup[:10],number,order_id))
+ return number
 
 def place_order(db,user,data,demo=False,owner='',now=None):
  idem=data.get('idempotency_key','')
@@ -215,6 +226,7 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  o={**priced,'id':'CJ'+(now or datetime.now(TZ)).strftime('%m%d')+'-'+secrets.token_hex(4).upper(),'name':name,'phone':phone,'pickup':pickup,'note':note,'status':'new','source':'line','external_order_id':None,'print_status':'not_connected','payment_method':'cash','payment_status':'unpaid','created_at':created,'demo':demo}
  if type(data.get('utensils',True)) is not bool: raise Problem('請確認餐具選項')
  o['utensils']=data.get('utensils',True)
+ o['pickup_number']=reserve_pickup_number(db,pickup,o['id'])
  db.execute('INSERT INTO web_orders VALUES (?,?,?,?,?)',(o['id'],user,idem,js(o),created))
  if not demo:
   enqueue(db,o['id'],user,'customer',order_cards(o,config))

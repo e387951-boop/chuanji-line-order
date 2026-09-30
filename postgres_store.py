@@ -3,6 +3,8 @@ import os
 import re
 
 COLUMNS = {
+ 'notification_errors': 'job_id,code,message,updated',
+ 'chat_deliveries': 'order_id,state,updated',
  'pickup_numbers': 'pickup_date,number,order_id',
  'web_settings': 'id,data',
  'products': 'id,data,version',

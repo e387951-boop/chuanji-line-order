@@ -32,6 +32,8 @@ def connect(path,postgres=False):
  CREATE TABLE IF NOT EXISTS web_outbox (id TEXT PRIMARY KEY, order_id TEXT, recipient TEXT, payload TEXT, retry_key TEXT, attempts INTEGER DEFAULT 0, due REAL DEFAULT 0, state TEXT DEFAULT 'queued');
  CREATE TABLE IF NOT EXISTS notification_owners (user_id TEXT PRIMARY KEY, created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS web_sessions (id TEXT PRIMARY KEY, csrf TEXT, user_id TEXT, admin INTEGER DEFAULT 0, expires REAL);
+ CREATE TABLE IF NOT EXISTS notification_errors (job_id TEXT PRIMARY KEY, code TEXT NOT NULL, message TEXT NOT NULL, updated TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS chat_deliveries (order_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated TEXT NOT NULL);
  ''')
  with db:
   db.execute('INSERT OR IGNORE INTO web_settings VALUES (1,?)',(js(DEFAULTS),))
@@ -46,6 +48,27 @@ def connect(path,postgres=False):
  return db
 
 def settings(db): return json.loads(db.execute('SELECT data FROM web_settings WHERE id=1').fetchone()[0])
+
+def closed_today(config,now=None):
+ return config.get('closed_date')==(now or datetime.now(TZ)).astimezone(TZ).date().isoformat()
+
+def public_settings(db,now=None):
+ config=settings(db)
+ return {**config,'closed_today':closed_today(config,now)}
+
+def set_day_off(db,enabled,now=None):
+ if type(enabled) is not bool: raise Problem('請確認休息設定')
+ config=settings(db); config['closed_date']=(now or datetime.now(TZ)).astimezone(TZ).date().isoformat() if enabled else ''
+ db.execute('UPDATE web_settings SET data=? WHERE id=1',(js(config),))
+ return public_settings(db,now)
+
+def earliest_pickup(config,now=None):
+ now=(now or datetime.now(TZ)).astimezone(TZ)
+ target=now+timedelta(minutes=config['lead_minutes'])
+ if target.second or target.microsecond: target=(target+timedelta(minutes=1)).replace(second=0,microsecond=0)
+ if target.hour<11: target=target.replace(hour=11,minute=0)
+ if target.date()!=now.date() or target.hour>=23: raise Problem('今天已無可取餐時段，請選擇預約時間')
+ return pickup_check(target.strftime('%Y-%m-%d %H:%M'),config,now)
 def catalogue(db,all_items=False):
  items=[]
  for r in db.execute('SELECT * FROM products ORDER BY rowid'):
@@ -115,6 +138,7 @@ def pickup_check(text,config,now=None):
  try: dt=datetime.strptime(text.replace('T',' '),'%Y-%m-%d %H:%M').replace(tzinfo=TZ)
  except (ValueError,AttributeError): raise Problem('請選取餐日期與時間')
  if dt.weekday()==5: raise Problem('週六公休，請選擇其他日期')
+ if dt.date().isoformat()==config.get('closed_date'): raise Problem('今天休息不好意思🙏🙏')
  if not 11<=dt.hour<23: raise Problem('取餐時間為11:00至22:59')
  if dt<now+timedelta(minutes=config['lead_minutes']): raise Problem(f"取餐至少提前{config['lead_minutes']}分鐘")
  if dt.date()>(now+timedelta(days=config['max_days'])).date(): raise Problem(f"最多可預訂{config['max_days']}天內的餐點")
@@ -135,13 +159,15 @@ def order_text(o,config):
  parts.append('訂單已登記，店家正在確認與安排製作。')
  return '\n'.join(parts)
 
-def customer_chat_card(o,liff_id):
- # The detail endpoint remains restricted to the authenticated order owner.
- def text(value,size='sm',weight='regular',color='#44372D'):
-  return {'type':'text','text':str(value),'size':size,'weight':weight,'color':color,'wrap':True}
- body=[text('川記麵線糊','lg','bold'),text('到店自取','xl','bold','#986C43'),text('訂單已送出，待店家確認'),{'type':'separator','margin':'lg'},text('訂單編號'),text(o.get('pickup_number',o['id']),'48px','bold'),text('取餐時間：'+o['pickup']),text('付款方式：現場付款'),text('NT$ '+str(o['total']),'xxl','bold','#B06D38')]
- bubble={'type':'bubble','body':{'type':'box','layout':'vertical','spacing':'md','contents':body},'footer':{'type':'box','layout':'vertical','contents':[{'type':'button','style':'primary','color':'#986C43','action':{'type':'uri','label':'訂單明細','uri':'https://liff.line.me/'+liff_id+'/#order/'+o['id']}}]}}
- return [{'type':'flex','altText':'川記訂單 '+o.get('pickup_number',o['id'])+'｜NT$ '+str(o['total']),'contents':bubble}]
+def customer_chat_card(o,liff_id,config=None):
+ # Include all bowls/customizations in the customer-originated chat record too.
+ messages=order_cards(o,config or DEFAULTS)
+ for message in messages:
+  content=message['contents']; bubbles=content['contents'] if content['type']=='carousel' else [content]
+  for bubble in bubbles:
+   bubble['footer']={'type':'box','layout':'vertical','contents':[{'type':'button','style':'primary','color':'#986C43','action':{'type':'uri','label':'訂單明細','uri':'https://liff.line.me/'+liff_id+'/#order/'+o['id']}}]}
+ messages.append({'type':'text','text':'【網頁訂單已送出】'+o.get('pickup_number',o['id'])+'\n取餐：'+o['pickup']+'\n總額：NT$ '+str(o['total'])+'\n餐點與口味請看上方明細卡片。'})
+ return messages
 
 def chat_receipt_messages(o,config):
  # Only call with a stored, authorized order; never trust a browser-provided total.
@@ -212,6 +238,7 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  existing=db.execute('SELECT data FROM web_orders WHERE user_id=? AND idem=?',(user,idem)).fetchone()
  if existing: return json.loads(existing[0])
  config=settings(db)
+ if closed_today(config,now): raise Problem('今天休息不好意思🙏🙏',409)
  if not config['accepting']: raise Problem('店家暫停接單，請稍後再試',409)
  if data.get('payment_method')!='cash': raise Problem('線上付款尚未開通，請選擇現場付款')
  name=str(data.get('name','')).strip(); phone=re.sub(r'[\s()-]','',str(data.get('phone','')))
@@ -219,7 +246,7 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  if not re.fullmatch(r'09\d{8}',phone): raise Problem('請填寫10碼台灣手機號碼')
  note=str(data.get('note','')).strip()
  if len(note)>200: raise Problem('備註最多200字')
- pickup=pickup_check(data.get('pickup',''),config,now)
+ pickup=earliest_pickup(config,now) if data.get('pickup_mode')=='asap' else pickup_check(data.get('pickup',''),config,now)
  priced=price_cart(db,data.get('items'))
  if type(data.get('expected_total')) is not int or data.get('expected_total')!=priced['total']: raise Problem('菜單價格已更新，請返回購物車重新確認金額。',409)
  created=(now or datetime.now(TZ)).isoformat(timespec='seconds')
@@ -228,11 +255,7 @@ def place_order(db,user,data,demo=False,owner='',now=None):
  o['utensils']=data.get('utensils',True)
  o['pickup_number']=reserve_pickup_number(db,pickup,o['id'])
  db.execute('INSERT INTO web_orders VALUES (?,?,?,?,?)',(o['id'],user,idem,js(o),created))
- if not demo:
-  enqueue(db,o['id'],user,'customer',order_cards(o,config))
-  recipients={r[0] for r in db.execute('SELECT user_id FROM notification_owners')}
-  recipients.update(x.strip() for x in owner.split(',') if re.fullmatch(r'U[0-9a-f]{32}',x.strip()))
-  for recipient in sorted(recipients): enqueue(db,o['id'],recipient,'owner-'+recipient,order_cards(o,config,owner=True))
+ # Order notifications are sent by the customer through LIFF, without paid push messages.
  return o
 
 def get_orders(db,start='',end='',user=None):

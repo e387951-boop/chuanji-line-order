@@ -7,6 +7,7 @@ from urllib.parse import urlsplit,parse_qs,urlencode
 from urllib.request import Request,urlopen
 from web_store import *
 from server import send_line
+from line_delivery import failure_reason, quota_status
 ROOT=Path(__file__).resolve().parent
 LOCK=threading.RLock()
 LOGIN_TRIES={}
@@ -23,14 +24,20 @@ def verify_line_id(token,channel):
 def deliver(db,token):
  while True:
   try:
-   with LOCK: jobs=db.execute("SELECT * FROM web_outbox WHERE state='queued' AND due<=? ORDER BY rowid LIMIT 15",(time.time(),)).fetchall()
+   with LOCK: jobs=db.execute("SELECT * FROM web_outbox WHERE state='queued' AND order_id NOT IN (SELECT id FROM web_orders) AND due<=? ORDER BY rowid LIMIT 15",(time.time(),)).fetchall()
    for job in jobs:
     try:
      send_line('push',job['payload'],token,job['retry_key'])
-     with LOCK,db: db.execute("UPDATE web_outbox SET state='sent' WHERE id=?",(job['id'],))
-    except Exception:
+     with LOCK,db:
+      db.execute("UPDATE web_outbox SET state='sent' WHERE id=?",(job['id'],))
+      db.execute('DELETE FROM notification_errors WHERE job_id=?',(job['id'],))
+    except Exception as error:
+     code,message=failure_reason(error)
      n=job['attempts']+1
-     with LOCK,db: db.execute('UPDATE web_outbox SET attempts=?,due=?,state=? WHERE id=?',(n,time.time()+min(300,2**min(n,8)),'failed' if n>=10 else 'queued',job['id']))
+     with LOCK,db:
+      db.execute('UPDATE web_outbox SET attempts=?,due=?,state=? WHERE id=?',(n,time.time()+min(300,2**min(n,8)),'failed' if n>=10 or code in ('monthly_limit','400','401','403') else 'queued',job['id']))
+      db.execute('INSERT INTO notification_errors(job_id,code,message,updated) VALUES (?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET code=excluded.code,message=excluded.message,updated=excluded.updated',(job['id'],code,message,nowstr()))
+     print('LINE notification failed: '+code,flush=True)
   except Exception as e: print('Notification worker: '+type(e).__name__,flush=True)
   time.sleep(2)
 
@@ -58,8 +65,8 @@ class Handler(BaseHTTPRequestHandler):
  def customer(self,s):
   if not s['user_id']: raise Problem('請先透過 LINE 登入後下單',401)
  def notifications(self,oid):
-  rows=self.server.db.execute('SELECT id,state FROM web_outbox WHERE order_id=?',(oid,)).fetchall()
-  return [{'recipient':'客人' if r['id'].endswith(':customer') else '店家','state':r['state']} for r in rows]
+  rows=self.server.db.execute('SELECT o.id,o.state,e.message FROM web_outbox o LEFT JOIN notification_errors e ON e.job_id=o.id WHERE o.order_id=?',(oid,)).fetchall()
+  return [{'recipient':'客人' if r['id'].endswith(':customer') else '店家','state':r['state'],'error':r['message'] or ''} for r in rows]
  def do_GET(self):
   self.new_cookie=None
   try:
@@ -70,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
     return self.respond(200,(ROOT/f).read_text(encoding='utf-8-sig'),mime+'; charset=utf-8')
    if path=='/health':
     with LOCK: self.server.db.execute('SELECT 1').fetchone()
-    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-09-23-returning-pickup-v1'})
+    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-10-01-customer-chat-only-v1'})
    if path=='/staff-entrance.jpg': return self.respond(200,(ROOT/'staff-entrance.jpg').read_bytes(),'image/jpeg')
    if path=='/admin-greeting.jpg': return self.respond(200,(ROOT/'admin-greeting.jpg').read_bytes(),'image/jpeg')
    if path=='/logo.jpg': return self.respond(200,(ROOT/'logo.jpg').read_bytes(),'image/jpeg')
@@ -80,16 +87,23 @@ class Handler(BaseHTTPRequestHandler):
     if not row: raise Problem('找不到照片',404)
     return self.respond(200,row['data'],row['mime'])
    s=self.session()
+   if path=='/api/admin/line-status':
+    self.admin(s)
+    with LOCK:
+     recipients={r[0] for r in self.server.db.execute('SELECT user_id FROM notification_owners')}
+     recipients.update(x.strip() for x in self.server.owner.split(',') if re.fullmatch(r'U[0-9a-f]{32}',x.strip()))
+     failed=self.server.db.execute("SELECT count(*) FROM web_outbox WHERE state='failed'").fetchone()[0]
+    return self.respond(200,{'owners':len(recipients),'failed':failed,**({} if self.server.demo else quota_status(self.server.token))})
    with LOCK:
     db=self.server.db
     if path=='/api/session': return self.respond(200,{'csrf':s['csrf'],'demo':self.server.demo,'logged_in':bool(s['user_id']),'admin':bool(s['admin']),'liff_id':self.server.liff_id})
-    if path=='/api/catalog': return self.respond(200,{'products':catalogue(db),'settings':settings(db),'online_payment':False,'demo':self.server.demo})
+    if path=='/api/catalog': return self.respond(200,{'products':catalogue(db),'settings':public_settings(db),'online_payment':False,'demo':self.server.demo})
     if path=='/api/my-orders':
      self.customer(s); return self.respond(200,{'orders':get_orders(db,user=s['user_id'])[:20]})
     if path.startswith('/api/order/'):
      self.customer(s); row=db.execute('SELECT data FROM web_orders WHERE id=? AND user_id=?',(path.split('/')[-1],s['user_id'])).fetchone()
      if not row: raise Problem('找不到訂單',404)
-     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id); return self.respond(200,o)
+     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id,settings(db)); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/backup':
@@ -109,11 +123,14 @@ class Handler(BaseHTTPRequestHandler):
       for o in get_orders(db,q.get('start',[''])[0],q.get('end',[''])[0]):
        writer.writerow([safe(v) for v in [o.get('pickup_number',o['id']),o['created_at'],o['pickup'],o['name'],o['phone'],STATUSES[o['status']],'已收款' if o['payment_status']=='paid' else '尚未收款',o['total'],order_text(o,settings(db)),o['note']]])
       return self.respond(200,output.getvalue().encode('utf-8-sig'),'text/csv; charset=utf-8','chuanji-orders.csv')
-     if path=='/api/admin/catalog': return self.respond(200,{'products':catalogue(db,True),'settings':settings(db)})
+     if path=='/api/admin/catalog': return self.respond(200,{'products':catalogue(db,True),'settings':public_settings(db)})
      if path=='/api/admin/orders':
       orders=get_orders(db,q.get('start',[''])[0],q.get('end',[''])[0])
       stats_data=stats(orders)
-      for o in orders[:300]: o['notifications']=self.notifications(o['id'])
+      for o in orders[:300]:
+       o['notifications']=self.notifications(o['id'])
+       chat=db.execute('SELECT state FROM chat_deliveries WHERE order_id=?',(o['id'],)).fetchone()
+       o['chat_delivery']=chat[0] if chat else 'unknown'
       return self.respond(200,{'orders':orders[:300],'stats':stats_data,'total_records':len(orders)})
    raise Problem('找不到頁面',404)
   except Problem as e: self.respond(e.status,{'error':e.message})
@@ -145,13 +162,28 @@ class Handler(BaseHTTPRequestHandler):
     with LOCK,db: db.execute('UPDATE web_sessions SET admin=1 WHERE id=?',(s['id'],))
     return self.respond(200,{'ok':True})
    with LOCK,db:
+    if path=='/api/store-entry':
+     self.customer(s); config=public_settings(db)
+     if config['closed_today'] and not self.server.demo:
+      key='closed:'+config['closed_date']+':'+hashlib.sha256(s['user_id'].encode()).hexdigest()
+      if not db.execute('SELECT 1 FROM web_outbox WHERE id=?',(key+':customer',)).fetchone():
+       enqueue(db,key,s['user_id'],'customer',[{'type':'text','text':'今天休息不好意思🙏🙏'}])
+     db.commit(); return self.respond(200,{'closed_today':config['closed_today']})
+    if path=='/api/chat-result':
+     self.customer(s); oid=str(data.get('id','')); state=data.get('state')
+     if state not in ('sent','failed','unavailable','pending'): raise Problem('通知狀態格式錯誤')
+     if not db.execute('SELECT 1 FROM web_orders WHERE id=? AND user_id=?',(oid,s['user_id'])).fetchone(): raise Problem('找不到訂單',404)
+     db.execute('INSERT INTO chat_deliveries(order_id,state,updated) VALUES (?,?,?) ON CONFLICT(order_id) DO UPDATE SET state=excluded.state,updated=excluded.updated',(oid,state,nowstr()))
+     return self.respond(200,{'ok':True})
     if path=='/api/quote': return self.respond(200,price_cart(db,data.get('items')))
     if path=='/api/orders':
      self.customer(s); o=place_order(db,s['user_id'],data,self.server.demo,self.server.owner)
      # Commit before responding before reporting successful order creation (storage persistence depends on deployment).
-     db.commit(); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id); return self.respond(200,o)
+     db.commit(); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id,settings(db)); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
+     if path=='/api/admin/day-off':
+      result=set_day_off(db,data.get('enabled')); db.commit(); return self.respond(200,result)
      if path=='/api/admin/bind-notifications':
       self.customer(s)
       if self.server.demo: raise Problem('請在正式 LINE 點餐頁設定')

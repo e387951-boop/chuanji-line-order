@@ -48,9 +48,19 @@ class ServiceAPI(unittest.TestCase):
   self.assertEqual(self.call('/api/chat-result',{'id':'mine','state':'arbitrary'})[0],400)
   self.assertEqual(self.call('/api/chat-result',{'id':'mine','state':'sent'})[0],200)
   self.assertEqual(self.db.execute('SELECT state FROM chat_deliveries WHERE order_id=?',('mine',)).fetchone()[0],'sent')
+ def test_webhook_signature_boundary(self):
+  import base64,hashlib,hmac
+  self.server.secret='test-only-secret'
+  body=json.dumps({'events':[]}).encode()
+  good=base64.b64encode(hmac.new(self.server.secret.encode(),body,hashlib.sha256).digest()).decode()
+  for signature,expected in [('bad',403),(good,200)]:
+   conn=HTTPConnection('127.0.0.1',self.server.server_port)
+   conn.request('POST','/webhook',body=body,headers={'X-Line-Signature':signature,'Content-Type':'application/json'})
+   response=conn.getresponse();self.assertEqual(response.status,expected);response.read();conn.close()
  def test_diagnostics_requires_admin(self):
   self.assertEqual(self.call('/api/admin/line-status')[0],401)
   self.call('/api/admin/login',{})
-  self.assertEqual(self.call('/api/admin/line-status')[1],{'owners':0,'failed':0})
+  self.assertEqual(self.call('/api/admin/line-status')[1],{'owners':0,'failed':0,'webhook_ready':False})
 
 if __name__=='__main__': unittest.main()
+

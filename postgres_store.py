@@ -3,6 +3,8 @@ import os
 import re
 
 COLUMNS = {
+ 'receipt_watch':'order_id,mode,due,confirmed,fallback',
+ 'chat_diagnostics':'order_id,reason,context,error_code,updated',
  'notification_errors': 'job_id,code,message,updated',
  'chat_deliveries': 'order_id,state,updated',
  'pickup_numbers': 'pickup_date,number,order_id',

@@ -45,6 +45,8 @@ def connect(path,postgres=False):
     for k,(name,price) in enumerate(items):
      p={'id':prefix+str(k),'name':name,'category':category,'small':0,'large':0,'price':price,'ingredients':[],'description':'','active':True,'photo':''}
      db.execute('INSERT INTO products VALUES (?,?,1)',(p['id'],js(p)))
+ from receipt_delivery import install
+ install(db)
  return db
 
 def settings(db): return json.loads(db.execute('SELECT data FROM web_settings WHERE id=1').fetchone()[0])
@@ -166,7 +168,7 @@ def customer_chat_card(o,liff_id,config=None):
   content=message['contents']; bubbles=content['contents'] if content['type']=='carousel' else [content]
   for bubble in bubbles:
    bubble['footer']={'type':'box','layout':'vertical','contents':[{'type':'button','style':'primary','color':'#986C43','action':{'type':'uri','label':'訂單明細','uri':'https://liff.line.me/'+liff_id+'/#order/'+o['id']}}]}
- messages.append({'type':'text','text':'【網頁訂單已送出】'+o.get('pickup_number',o['id'])+'\n取餐：'+o['pickup']+'\n總額：NT$ '+str(o['total'])+'\n餐點與口味請看上方明細卡片。'})
+ messages.append({'type':'text','text':'【網頁訂單已送出】'+o.get('pickup_number',o['id'])+'\n取餐：'+o['pickup']+'\n總額：NT$ '+str(o['total'])+'\n餐點與口味請看上方明細卡片。\n訂單查詢碼：'+o['id']})
  return messages
 
 def chat_receipt_messages(o,config):

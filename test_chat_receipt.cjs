@@ -1,10 +1,13 @@
 const assert=require('node:assert/strict');
-const {send,available}=require('./chat_receipt.js');
+const {send,available,inspect,preflight,sendDetailed}=require('./chat_receipt.js');
 (async()=>{
  const values=new Map(),storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};
  const order={id:'CJ-test',chat_messages:[{type:'text',text:'已成立訂單 NT$ 165'}]};
  let calls=0;
  const liff={isInClient:()=>true,getContext:()=>({type:'utou'}),isApiAvailable:()=>{throw Error("unsupported availability API")},sendMessages:async messages=>{calls++;assert.deepEqual(messages,order.chat_messages)}};
+ assert.equal(inspect({...liff,getContext:()=>null}).reason,'context_missing');
+ assert.equal((await preflight({...liff,permission:{query:async()=>({state:'denied'})}})).reason,'permission_denied');
+ const report=await sendDetailed({...order,id:'diagnostic'},{...liff,sendMessages:async()=>{throw {code:'403',message:'sensitive detail'}}},storage);assert.equal(report.error_code,'403');assert.equal(report.reason,'api_error');assert.ok(!JSON.stringify(report).includes('sensitive'));
  assert.equal(available({...liff,getContext:()=>({type:'group'})}),false);
  assert.equal(await send(order,{...liff,isInClient:()=>false},storage),'unavailable');
  assert.equal(calls,0);

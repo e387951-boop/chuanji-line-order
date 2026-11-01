@@ -6,7 +6,8 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlsplit,parse_qs,urlencode
 from urllib.request import Request,urlopen
 from web_store import *
-from server import send_line
+from server import send_line, verify
+import receipt_delivery as receipts
 from line_delivery import failure_reason, quota_status
 ROOT=Path(__file__).resolve().parent
 LOCK=threading.RLock()
@@ -21,12 +22,17 @@ def verify_line_id(token,channel):
  if data.get('aud')!=channel or data.get('iss')!='https://access.line.me' or data.get('exp',0)<=time.time() or not re.fullmatch(r'U[0-9a-f]{32}',data.get('sub','')): raise Problem('LINE 登入資訊無效',401)
  return data['sub']
 
-def deliver(db,token):
+def deliver(db,token,owner):
  while True:
   try:
-   with LOCK: jobs=db.execute("SELECT * FROM web_outbox WHERE state='queued' AND order_id NOT IN (SELECT id FROM web_orders) AND due<=? ORDER BY rowid LIMIT 15",(time.time(),)).fetchall()
+   with LOCK,db:
+    receipts.schedule(db,owner)
+    jobs=db.execute("SELECT * FROM web_outbox WHERE state='queued' AND (order_id NOT IN (SELECT id FROM web_orders) OR (id LIKE order_id || ':fallback:%' AND order_id IN (SELECT order_id FROM receipt_watch WHERE fallback='queued' AND confirmed=0))) AND due<=? ORDER BY rowid LIMIT 15",(time.time(),)).fetchall()
    for job in jobs:
     try:
+     with LOCK:
+      current=db.execute('SELECT state FROM web_outbox WHERE id=?',(job['id'],)).fetchone()
+      if not current or current[0]!='queued': continue
      send_line('push',job['payload'],token,job['retry_key'])
      with LOCK,db:
       db.execute("UPDATE web_outbox SET state='sent' WHERE id=?",(job['id'],))
@@ -77,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
     return self.respond(200,(ROOT/f).read_text(encoding='utf-8-sig'),mime+'; charset=utf-8')
    if path=='/health':
     with LOCK: self.server.db.execute('SELECT 1').fetchone()
-    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-10-01-customer-chat-only-v1'})
+    return self.respond(200,{'ok':True,'mode':'demo' if self.server.demo else 'live','storage':'postgres' if getattr(self.server.db,'persistent',False) else 'sqlite','version':'2026-11-01-receipt-fallback-v1'})
    if path=='/staff-entrance.jpg': return self.respond(200,(ROOT/'staff-entrance.jpg').read_bytes(),'image/jpeg')
    if path=='/admin-greeting.jpg': return self.respond(200,(ROOT/'admin-greeting.jpg').read_bytes(),'image/jpeg')
    if path=='/logo.jpg': return self.respond(200,(ROOT/'logo.jpg').read_bytes(),'image/jpeg')
@@ -93,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
      recipients={r[0] for r in self.server.db.execute('SELECT user_id FROM notification_owners')}
      recipients.update(x.strip() for x in self.server.owner.split(',') if re.fullmatch(r'U[0-9a-f]{32}',x.strip()))
      failed=self.server.db.execute("SELECT count(*) FROM web_outbox WHERE state='failed'").fetchone()[0]
-    return self.respond(200,{'owners':len(recipients),'failed':failed,**({} if self.server.demo else quota_status(self.server.token))})
+    return self.respond(200,{'owners':len(recipients),'failed':failed,'webhook_ready':bool(getattr(self.server,'secret','')),**({} if self.server.demo else quota_status(self.server.token))})
    with LOCK:
     db=self.server.db
     if path=='/api/session': return self.respond(200,{'csrf':s['csrf'],'demo':self.server.demo,'logged_in':bool(s['user_id']),'admin':bool(s['admin']),'liff_id':self.server.liff_id})
@@ -103,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
     if path.startswith('/api/order/'):
      self.customer(s); row=db.execute('SELECT data FROM web_orders WHERE id=? AND user_id=?',(path.split('/')[-1],s['user_id'])).fetchone()
      if not row: raise Problem('找不到訂單',404)
-     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id,settings(db)); return self.respond(200,o)
+     o=json.loads(row[0]); o['notifications']=self.notifications(o['id']); o['delivery']=receipts.status(db,o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id,settings(db)); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/backup':
@@ -131,6 +137,9 @@ class Handler(BaseHTTPRequestHandler):
        o['notifications']=self.notifications(o['id'])
        chat=db.execute('SELECT state FROM chat_deliveries WHERE order_id=?',(o['id'],)).fetchone()
        o['chat_delivery']=chat[0] if chat else 'unknown'
+       o['delivery']=receipts.status(db,o['id'])
+       detail=db.execute('SELECT reason,context,error_code FROM chat_diagnostics WHERE order_id=?',(o['id'],)).fetchone()
+       o['chat_diagnostics']=dict(detail) if detail else {}
       return self.respond(200,{'orders':orders[:300],'stats':stats_data,'total_records':len(orders)})
    raise Problem('找不到頁面',404)
   except Problem as e: self.respond(e.status,{'error':e.message})
@@ -139,6 +148,15 @@ class Handler(BaseHTTPRequestHandler):
   self.new_cookie=None
   try:
    path=urlsplit(self.path).path
+   if path=='/webhook':
+    length=int(self.headers.get('Content-Length','0'))
+    if not 0<length<=262144: raise Problem('Invalid size',413)
+    raw=self.rfile.read(length)
+    if not verify(raw,self.headers.get('X-Line-Signature',''),getattr(self.server,'secret','')): raise Problem('Invalid signature',403)
+    payload=json.loads(raw)
+    with LOCK,self.server.db:
+     for event in payload.get('events',[]): receipts.acknowledge(self.server.db,event)
+    return self.respond(200,{'ok':True})
    origin=self.headers.get('Origin',''); expected='http://'+self.headers.get('Host','') if self.server.demo else self.server.origin
    if origin!=expected: raise Problem('網頁來源驗證失敗，請重新開啟',403)
    length=int(self.headers.get('Content-Length','0'))
@@ -173,13 +191,14 @@ class Handler(BaseHTTPRequestHandler):
      self.customer(s); oid=str(data.get('id','')); state=data.get('state')
      if state not in ('sent','failed','unavailable','pending'): raise Problem('通知狀態格式錯誤')
      if not db.execute('SELECT 1 FROM web_orders WHERE id=? AND user_id=?',(oid,s['user_id'])).fetchone(): raise Problem('找不到訂單',404)
-     db.execute('INSERT INTO chat_deliveries(order_id,state,updated) VALUES (?,?,?) ON CONFLICT(order_id) DO UPDATE SET state=excluded.state,updated=excluded.updated',(oid,state,nowstr()))
-     return self.respond(200,{'ok':True})
+     receipts.report(db,oid,state,data)
+     db.commit(); return self.respond(200,{'ok':True,'delivery':receipts.status(db,oid)})
     if path=='/api/quote': return self.respond(200,price_cart(db,data.get('items')))
     if path=='/api/orders':
      self.customer(s); o=place_order(db,s['user_id'],data,self.server.demo,self.server.owner)
+     receipts.enroll(db,o,bool(getattr(self.server,'secret','')))
      # Commit before responding before reporting successful order creation (storage persistence depends on deployment).
-     db.commit(); o['notifications']=self.notifications(o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id,settings(db)); return self.respond(200,o)
+     db.commit(); o['notifications']=self.notifications(o['id']); o['delivery']=receipts.status(db,o['id']); o['chat_messages']=customer_chat_card(o,self.server.liff_id,settings(db)); return self.respond(200,o)
     if path.startswith('/api/admin/'):
      self.admin(s)
      if path=='/api/admin/day-off':
@@ -220,14 +239,21 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--demo',action='store_true');p.add_argument('--port',type=int,default=int(os.getenv('PORT','8788')));args=p.parse_args()
- config={'liff_id':os.getenv('LIFF_ID',''),'channel_id':os.getenv('LINE_LOGIN_CHANNEL_ID',''),'token':os.getenv('LINE_CHANNEL_ACCESS_TOKEN',''),'owner':os.getenv('LINE_OWNER_USER_ID',''),'origin':os.getenv('PUBLIC_ORIGIN','').rstrip('/'),'admin_password':os.getenv('ADMIN_PASSWORD','')}
+ config={'secret':os.getenv('LINE_CHANNEL_SECRET',''),'liff_id':os.getenv('LIFF_ID',''),'channel_id':os.getenv('LINE_LOGIN_CHANNEL_ID',''),'token':os.getenv('LINE_CHANNEL_ACCESS_TOKEN',''),'owner':os.getenv('LINE_OWNER_USER_ID',''),'origin':os.getenv('PUBLIC_ORIGIN','').rstrip('/'),'admin_password':os.getenv('ADMIN_PASSWORD','')}
  if not args.demo and (not all(config[k] for k in ('liff_id','channel_id','token','origin','admin_password')) or not config['origin'].startswith('https://') or len(config['admin_password'])<12): p.error('Live mode requires LIFF_ID, LINE_LOGIN_CHANNEL_ID, LINE_CHANNEL_ACCESS_TOKEN, HTTPS PUBLIC_ORIGIN and ADMIN_PASSWORD (12+ characters).')
  path=Path(os.getenv('WEB_ORDER_DB',str(ROOT/('web-demo.sqlite3' if args.demo else 'web-orders.sqlite3'))));path.parent.mkdir(parents=True,exist_ok=True)
  # Database migration is opt-in; staged credentials must not block storefront releases.
  use_postgres=not args.demo and os.getenv('ORDER_STORAGE','sqlite').lower()=='postgres'
  if use_postgres and not all(os.getenv(k) for k in ('PGUSER','PGPASSWORD')): p.error('Postgres requires PGUSER and PGPASSWORD')
- db=connect(str(path),postgres=use_postgres);server=ThreadingHTTPServer(('127.0.0.1' if args.demo else '0.0.0.0',args.port),Handler); server.demo=args.demo;server.db=db
+ fresh_database=not path.exists() and not use_postgres and not args.demo
+ db=connect(str(path),postgres=use_postgres)
+ if fresh_database:
+  with db:
+   config_data=settings(db);config_data['accepting']=False
+   db.execute('UPDATE web_settings SET data=? WHERE id=1',(js(config_data),))
+  print('New empty production database: accepting disabled until data restore.',flush=True)
+ server=ThreadingHTTPServer(('127.0.0.1' if args.demo else '0.0.0.0',args.port),Handler); server.demo=args.demo;server.db=db
  for k,v in config.items():setattr(server,k,v)
- if not args.demo:threading.Thread(target=deliver,args=(db,config['token']),daemon=True).start()
+ if not args.demo:threading.Thread(target=deliver,args=(db,config['token'],config['owner']),daemon=True).start()
  print('Chuanji storefront and admin on '+str(args.port),flush=True);server.serve_forever()
 if __name__=='__main__':main()
